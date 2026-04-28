@@ -17,3 +17,6 @@ target_link_libraries(tensor_func PRIVATE ggml::ggml)
 
 add_executable(auto_diff auto_diff.cpp)
 target_link_libraries(auto_diff PRIVATE ggml::ggml)
+
+add_executable(house_price_predict house_price_predict.cpp)
+target_link_libraries(house_price_predict PRIVATE ggml::ggml)
