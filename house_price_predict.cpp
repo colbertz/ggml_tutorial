@@ -33,6 +33,7 @@ int load_training_data(std::vector<float> &x_trains,
     col3 = std::stof(cell);
 
     x_trains.push_back(col1 / 1000.0f);
+    x_trains.push_back(col2);
     y_trains.push_back(col3 / 1000.0f);
   }
 
@@ -40,10 +41,22 @@ int load_training_data(std::vector<float> &x_trains,
   return 0;
 }
 
+void set_tensor_data_1d(ggml_tensor *t, std::vector<float> values) {
+  for (int i = 0; i < values.size(); i++)
+    ggml_set_f32_1d(t, i, values[i]);
+}
+
+std::vector<float> get_tensor_data_1d(ggml_tensor *t, size_t len) {
+  std::vector<float> ret;
+  for (int i = 0; i < len; i++)
+    ret.push_back(ggml_get_f32_1d(t, i));
+  return ret;
+}
+
 ggml_cgraph *buildgraph(ggml_context *ctx, ggml_tensor *x, ggml_tensor *y,
                         ggml_tensor *m2, ggml_tensor *w, ggml_tensor *b,
                         ggml_tensor **loss) {
-  struct ggml_tensor *wx = ggml_mul(ctx, x, w);
+  struct ggml_tensor *wx = ggml_mul_mat(ctx, x, w);
   struct ggml_tensor *y_predict = ggml_add(ctx, wx, b);
   struct ggml_tensor *e = ggml_sub(ctx, y_predict, y);
   struct ggml_tensor *e_sqr = ggml_mul(ctx, e, e);
@@ -66,23 +79,22 @@ int main() {
   }
 
   // 1. 初始化上下文
-  struct ggml_init_params ggml_params = {.mem_size =
-                                             64 * 1024 * 1024, // 64 MB
+  struct ggml_init_params ggml_params = {.mem_size = 64 * 1024 * 1024, // 64 MB
                                          .mem_buffer = NULL,
                                          .no_alloc = false};
   struct ggml_context *ctx = ggml_init(ggml_params);
 
-  size_t m_samples = x_trains.size();
+  size_t m_samples = y_trains.size();
 
-  struct ggml_tensor *x = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, m_samples);
-  struct ggml_tensor *y = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, m_samples);
+  struct ggml_tensor *x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2, m_samples);
+  struct ggml_tensor *y = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, m_samples, 1);
   struct ggml_tensor *m2 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-  struct ggml_tensor *w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+  struct ggml_tensor *w = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2, 1);
   struct ggml_tensor *b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
 
   float *x_data = (float *)x->data;
   float *y_data = (float *)y->data;
-  memcpy(x_data, x_trains.data(), m_samples * sizeof(float));
+  memcpy(x_data, x_trains.data(), 2 * m_samples * sizeof(float));
   memcpy(y_data, y_trains.data(), m_samples * sizeof(float));
   ggml_set_f32(m2, 2.0f * (float)m_samples);
 
@@ -94,32 +106,37 @@ int main() {
 
   // 从极小值开始尝试
   float lr = 1e-2f; // 或者 1e-9f, 1e-8f
-  float w_value = 0.0f;
+  std::vector<float> w_value {0.0f,0.0f};
   float b_value = 0.0f;
 
   size_t iter;
   std::cin >> iter;
   for (int i = 0; i < iter; i++) {
-    ggml_set_f32(w, w_value);
+    set_tensor_data_1d(w, w_value);
     ggml_set_f32(b, b_value);
 
     ggml_graph_reset(gf);
     ggml_graph_compute_with_ctx(ctx, gf, 1);
 
     float loss_value = ggml_get_f32_1d(loss, 0);
-    std::cout << std::format("Iteration {}, Loss: {}, w: {}, b: {}\n", i,
-                             loss_value, w_value, b_value);
+    std::cout << std::format("Iteration {}, Loss: {}, w1: {}, w2: {}, b: {}\n",
+                             i, loss_value, w_value[0], w_value[1], b_value);
 
     struct ggml_tensor *dl_dw = ggml_graph_get_grad(gf, w);
     struct ggml_tensor *dl_db = ggml_graph_get_grad(gf, b);
-    float dl_dw_value = ggml_get_f32_1d(dl_dw, 0);
+    std::vector<float> dl_dw_value = get_tensor_data_1d(dl_dw, ggml_nelements(dl_dw));
     float dl_db_value = ggml_get_f32_1d(dl_db, 0);
-    w_value = w_value - lr * dl_dw_value;
+    
+    for(int i=0;i<w_value.size();i++){
+      w_value[i] -= lr*dl_dw_value[i];
+    }
     b_value = b_value - lr * dl_db_value;
   }
 
-  std::cout << std::format("Final w {}, b: {}\n", w_value, b_value);
+  std::cout << std::format("Final w1: {}, w2: {}, b: {}\n", 
+    w_value[0], w_value[1],b_value);
 
   ggml_free(ctx);
   return 0;
 }
+
